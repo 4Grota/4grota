@@ -2111,7 +2111,7 @@ function sbAdapter(sb) {
 }
 function watchPerfis(next, err) {
   let dead = false;
-  const mapa = r => ({ id: r.id, nome: r.nome, usuario: r.email, email: r.email, perfil: r.perfil, ativo: r.ativo, criadoEm: String(r.criado_em || '').slice(0, 10) });
+  const mapa = r => ({ id: r.id, nome: r.nome, usuario: r.usuario || r.email, email: r.email, perfil: r.perfil, ativo: r.ativo, trocarSenha: !!r.trocar_senha, criadoEm: String(r.criado_em || '').slice(0, 10) });
   const carregar = async () => { const { data, error } = await SB.from('g4_profiles').select('*'); if (error) throw error; if (!dead) next((data || []).map(mapa)); };
   carregar().catch(e => { if (!dead && err) err(e); });
   const ch = SB.channel('g4-profiles-' + Math.random().toString(36).slice(2)).on('postgres_changes', { event: '*', schema: 'public', table: 'g4_profiles' }, () => { carregar().catch(() => {}); }).subscribe();
@@ -2147,7 +2147,7 @@ function pararDados() {
 async function carregarPerfil() {
   const { data, error } = await SB.from('g4_profiles').select('*').eq('id', SBS.session.user.id).maybeSingle();
   if (error) throw error;
-  SBS.profile = data ? { id: data.id, nome: data.nome, usuario: data.email, email: data.email, perfil: data.perfil, ativo: data.ativo } : null;
+  SBS.profile = data ? { id: data.id, nome: data.nome, usuario: data.usuario || data.email, email: data.email, perfil: data.perfil, ativo: data.ativo, trocarSenha: !!data.trocar_senha } : null;
   SBS.perfilCarregado = true;
 }
 async function aoMudarSessao() {
@@ -2179,6 +2179,8 @@ const AUTH = { user: null, falhas: 0, bloqueadoAte: 0, last: Date.now() };
 const isAdmin = () => !!(AUTH.user && AUTH.user.perfil === 'admin');
 const SENHA_MIN = 8;
 const PERFIL = { admin: 'Administrador', socio: 'Sócio' };
+const DOMINIO_LOGIN = '4grota.invalid';   // o nome de usuário vira usuario@4grota.invalid por dentro (igual ao SQL)
+const emailDoLogin = v => { v = String(v || '').trim().toLowerCase(); return v.indexOf('@') >= 0 ? v : v + '@' + DOMINIO_LOGIN; };
 
 function gateMode() {
   if (SBS.semConfig) return 'semconfig';
@@ -2189,6 +2191,7 @@ function gateMode() {
   if (!SBS.profile || !SBS.profile.ativo) return 'pendente';
   if (!allReady()) return 'load';
   syncAuth();
+  if (AUTH.user && AUTH.user.trocarSenha && !SBS.trocaAberta) { SBS.trocaAberta = true; setTimeout(() => senhaForm(true), 0); }
   return AUTH.user ? 'app' : 'load';
 }
 function syncAuth() {
@@ -2227,27 +2230,20 @@ function gateHTML(mode) {
   if (mode === 'recovery') return `<div class="g-wrap">${logo}<div class="g-card"><h1>Nova senha</h1>${campo('rc-pass', `Nova senha (mínimo ${SENHA_MIN} caracteres)`, 'type="password" autocomplete="new-password"')}${campo('rc-pass2', 'Repita a nova senha', 'type="password" autocomplete="new-password"')}
     <label class="chk"><input type="checkbox" data-act="verSenha"> Mostrar senha</label><div id="g-err" class="alert bad" hidden></div><button class="btn pri" data-act="salvarRecovery" style="justify-content:center">Salvar nova senha</button></div>${foot}</div>`;
   return `<div class="g-wrap">${logo}<div class="g-card"><h1>Entrar</h1>
-    ${campo('lg-user', 'E-mail', 'type="email" autocomplete="username" autocapitalize="none" autocorrect="off" spellcheck="false"')}${campo('lg-pass', 'Senha', 'type="password" autocomplete="current-password"')}
+    ${campo('lg-user', 'Usuário', 'autocomplete="username" autocapitalize="none" autocorrect="off" spellcheck="false"')}${campo('lg-pass', 'Senha', 'type="password" autocomplete="current-password"')}
     <label class="chk"><input type="checkbox" data-act="verSenha"> Mostrar senha</label><div id="g-err" class="alert bad" hidden></div>
     <button class="btn pri" data-act="login" style="justify-content:center">Entrar</button>
-    <button class="btn sm" data-act="esqueci" style="justify-content:center;border:0;background:transparent;color:#5B6560">Esqueci minha senha</button></div>${foot}</div>`;
+    <p class="muted small" style="margin:0">Esqueceu a senha? Peça a um administrador para redefinir.</p></div>${foot}</div>`;
 }
 const gErr = (msg, ok) => { const e = $('#g-err'); if (e) { e.textContent = msg; e.hidden = !msg; e.className = 'alert ' + (ok ? 'ok' : 'bad'); } };
 async function doLogin() {
-  const email = ($('#lg-user').value || '').trim().toLowerCase(), senha = $('#lg-pass').value || '';
+  const usuario = ($('#lg-user').value || '').trim(), senha = $('#lg-pass').value || '';
   if (Date.now() < AUTH.bloqueadoAte) return gErr('Muitas tentativas. Aguarde 30 segundos e tente de novo.');
-  if (!email || !senha) return gErr('Informe e-mail e senha.');
+  if (!usuario || !senha) return gErr('Informe usuário e senha.');
   gErr('');
-  const { error } = await SB.auth.signInWithPassword({ email, password: senha });
-  if (error) { AUTH.falhas++; if (AUTH.falhas >= 5) { AUTH.bloqueadoAte = Date.now() + 30000; AUTH.falhas = 0; } return gErr(msgAuth(error)); }
+  const { error } = await SB.auth.signInWithPassword({ email: emailDoLogin(usuario), password: senha });
+  if (error) { AUTH.falhas++; if (AUTH.falhas >= 5) { AUTH.bloqueadoAte = Date.now() + 30000; AUTH.falhas = 0; } return gErr(/invalid login credentials/i.test(error.message || '') ? 'Usuário ou senha incorretos.' : msgAuth(error)); }
   AUTH.falhas = 0;
-}
-async function doEsqueci() {
-  const email = ($('#lg-user').value || '').trim().toLowerCase();
-  if (!email) return gErr('Digite seu e-mail no campo acima e toque de novo em "Esqueci minha senha".');
-  const { error } = await SB.auth.resetPasswordForEmail(email, { redirectTo: location.origin + location.pathname });
-  if (error) return gErr(msgAuth(error));
-  gErr('Se esse e-mail estiver cadastrado, enviamos um link para criar uma nova senha.', true);
 }
 async function doRecovery() {
   const s1 = $('#rc-pass').value, s2 = $('#rc-pass2').value, e = validaSenha(s1, s2); if (e) return gErr(e);
@@ -2256,51 +2252,103 @@ async function doRecovery() {
   SBS.recovery = false; UI.gateMode = null; try { history.replaceState(null, '', location.pathname); } catch (x) {}
   toast('Senha alterada.'); await aoMudarSessao();
 }
-function senhaForm() {
+function senhaForm(forcado) {
   const u = AUTH.user; if (!u) return;
-  openModal('Alterar minha senha', `<div class="fgrid">${fld('Senha atual', inp('atual', '', 'type="password" autocomplete="current-password"'), '', 'full')}
+  openModal(forcado ? 'Defina a sua senha' : 'Alterar minha senha', `${forcado ? '<div class="alert warn" style="margin:0">Você entrou com uma senha provisória. Escolha uma senha só sua para continuar.</div>' : ''}<div class="fgrid">
+    ${forcado ? '' : fld('Senha atual', inp('atual', '', 'type="password" autocomplete="current-password"'), '', 'full')}
     ${fld(`Nova senha (mínimo ${SENHA_MIN} caracteres)`, inp('nova', '', 'type="password" autocomplete="new-password"'))}${fld('Repita a nova senha', inp('nova2', '', 'type="password" autocomplete="new-password"'))}</div>`, {
-    submitText: 'Salvar senha',
+    submitText: 'Salvar senha', noClose: !!forcado,
     onSubmit: async el => {
       const f = form(el), e = validaSenha(f.nova, f.nova2); if (e) return setErr(el, e);
-      if (f.nova === f.atual) return setErr(el, 'A nova senha precisa ser diferente da atual.');
-      const chk = await SB.auth.signInWithPassword({ email: u.email || u.usuario, password: f.atual });
-      if (chk.error) return setErr(el, 'A senha atual não confere.');
+      if (!forcado) {
+        if (f.nova === f.atual) return setErr(el, 'A nova senha precisa ser diferente da atual.');
+        const chk = await SB.auth.signInWithPassword({ email: u.email || emailDoLogin(u.usuario), password: f.atual });
+        if (chk.error) return setErr(el, 'A senha atual não confere.');
+      }
       const { error } = await SB.auth.updateUser({ password: f.nova });
       if (error) return setErr(el, msgAuth(error));
+      try { await SB.rpc('g4_concluir_troca_senha'); } catch (x) {}
+      SBS.trocaAberta = false;
+      if (AUTH.user) AUTH.user.trocarSenha = false;
       log('Senha alterada', u.nome); closeModal(); toast('Senha alterada.');
     }
   });
 }
 
-/* --- administração de usuários (perfis) --- */
+/* --- administração de usuários (feita pelo administrador, dentro do sistema) --- */
 function usuariosCard() {
   if (!isAdmin()) return '';
   const us = Object.values(S.data.users).sort((a, b) => a.nome.localeCompare(b.nome));
   const admins = us.filter(x => x.perfil === 'admin' && x.ativo).length;
   const rows = us.map(x => {
     const eu = AUTH.user && x.id === AUTH.user.id, ultimo = x.perfil === 'admin' && x.ativo && admins <= 1;
-    return `<tr><td><b>${esc(x.nome)}</b>${eu ? ' <span class="muted small">(você)</span>' : ''}</td><td>${esc(x.email || '')}</td><td>${chip(x.perfil === 'admin' ? 'warn' : 'mute', PERFIL[x.perfil] || x.perfil)}</td><td>${x.ativo ? chip('ok', 'Ativo') : chip('bad', 'Aguardando liberação')}</td>
-      <td class="act"><button class="btn sm" data-act="renomearUser" data-id="${x.id}">Nome</button>${ultimo ? '' : `<button class="btn sm" data-act="perfilUser" data-id="${x.id}">${x.perfil === 'admin' ? 'Tornar sócio' : 'Tornar admin'}</button>`}${eu || ultimo ? '' : `<button class="btn sm ${x.ativo ? 'dng' : 'pri'}" data-act="ativoUser" data-id="${x.id}">${x.ativo ? 'Desativar' : 'Liberar acesso'}</button>`}</td></tr>`;
+    return `<tr><td><b>${esc(x.nome)}</b>${eu ? ' <span class="muted small">(você)</span>' : ''}</td><td>${esc(String(x.usuario || '').replace('@' + DOMINIO_LOGIN, ''))}</td><td>${chip(x.perfil === 'admin' ? 'warn' : 'mute', PERFIL[x.perfil] || x.perfil)}</td>
+      <td>${x.ativo ? chip('ok', 'Ativo') : chip('bad', 'Desativado')}${x.trocarSenha ? ' ' + chip('warn', 'Senha provisória') : ''}</td>
+      <td class="act"><button class="btn sm" data-act="resetSenha" data-id="${x.id}">Redefinir senha</button><button class="btn sm" data-act="loginUser" data-id="${x.id}">Alterar login</button><button class="btn sm" data-act="renomearUser" data-id="${x.id}">Nome</button>${ultimo ? '' : `<button class="btn sm" data-act="perfilUser" data-id="${x.id}">${x.perfil === 'admin' ? 'Tornar sócio' : 'Tornar admin'}</button>`}${eu || ultimo ? '' : `<button class="btn sm" data-act="ativoUser" data-id="${x.id}">${x.ativo ? 'Desativar' : 'Reativar'}</button><button class="btn sm dng" data-act="delUser" data-id="${x.id}">Excluir</button>`}</td></tr>`;
   });
-  return `<div class="card" style="grid-column:1/-1"><div class="row" style="justify-content:space-between"><h3 style="margin:0">Usuários e acessos</h3><button class="btn sm" data-act="newUser">Como adicionar um sócio</button></div>
-    <div style="margin-top:10px">${tbl([['Nome'], ['E-mail'], ['Perfil'], ['Situação'], ['', 'act']], rows)}</div>
-    <p class="muted small" style="margin-bottom:0">Quem cria uma conta no Supabase só entra no sistema depois que um administrador clicar em "Liberar acesso".</p></div>`;
+  return `<div class="card" style="grid-column:1/-1"><div class="row" style="justify-content:space-between"><h3 style="margin:0">Usuários e acessos</h3><button class="btn sm pri" data-act="newUser">+ Novo usuário</button></div>
+    <div style="margin-top:10px">${tbl([['Nome'], ['Usuário (login)'], ['Perfil'], ['Situação'], ['', 'act']], rows)}</div>
+    <p class="muted small" style="margin-bottom:0">Você cria o usuário aqui, com uma senha provisória, e passa o usuário e a senha para o sócio. No primeiro acesso ele é obrigado a escolher a própria senha.</p></div>`;
 }
 async function atualizarPerfil(id, campos, texto) {
   const { error } = await SB.from('g4_profiles').update(campos).eq('id', id);
   if (error) return toast(msgAuth(error), 'bad');
   log('Usuário alterado', texto); toast('Atualizado.');
 }
+async function rpcAdmin(nome, args) {
+  const { error } = await SB.rpc(nome, args);
+  return error ? msgAuth(error) : null;
+}
+function novoUsuarioForm() {
+  openModal('Novo usuário', `<div class="fgrid">${fld('Nome', inp('nome', ''), '', 'full')}${fld('Usuário (para entrar)', inp('usuario', '', 'autocapitalize="none" autocomplete="off" placeholder="ex.: maria"'), 'Letras minúsculas, números, ponto, hífen ou sublinhado.')}${fld('Perfil', sel('perfil', [['socio', 'Sócio'], ['admin', 'Administrador']], 'socio'))}
+    ${fld(`Senha provisória (mínimo ${SENHA_MIN})`, inp('senha', '', 'type="text" autocomplete="off"'), 'A pessoa troca no primeiro acesso.', 'full')}</div>`, {
+    submitText: 'Criar usuário',
+    onSubmit: async el => {
+      const f = form(el), usuario = f.usuario.toLowerCase().trim();
+      if (!f.nome) return setErr(el, 'Informe o nome.');
+      if (!/^[a-z0-9._-]{3,30}$/.test(usuario)) return setErr(el, 'Usuário: 3 a 30 caracteres, só letras minúsculas, números, ponto, hífen ou sublinhado.');
+      const e = validaSenha(f.senha); if (e) return setErr(el, e);
+      const erro = await rpcAdmin('g4_admin_criar_usuario', { p_usuario: usuario, p_nome: f.nome, p_senha: f.senha, p_perfil: f.perfil });
+      if (erro) return setErr(el, erro);
+      log('Usuário criado', `${f.nome} (${usuario}, ${PERFIL[f.perfil]})`); closeModal(); toast('Usuário criado. Passe o usuário e a senha provisória para ' + f.nome + '.');
+    }
+  });
+}
+function resetSenhaForm(id) {
+  const u = S.data.users[id]; if (!u) return;
+  openModal('Redefinir senha · ' + u.nome, `<div class="fgrid">${fld(`Nova senha provisória (mínimo ${SENHA_MIN})`, inp('senha', '', 'type="text" autocomplete="off"'), 'A pessoa será desconectada e terá que trocar a senha no próximo acesso.', 'full')}</div>`, {
+    submitText: 'Redefinir',
+    onSubmit: async el => {
+      const f = form(el), e = validaSenha(f.senha); if (e) return setErr(el, e);
+      const erro = await rpcAdmin('g4_admin_redefinir_senha', { p_id: id, p_senha: f.senha }); if (erro) return setErr(el, erro);
+      log('Senha redefinida', u.nome); closeModal(); toast('Senha redefinida.');
+    }
+  });
+}
+function loginUserForm(id) {
+  const u = S.data.users[id]; if (!u) return;
+  const atual = String(u.usuario || '').replace('@' + DOMINIO_LOGIN, '');
+  openModal('Alterar login · ' + u.nome, `<div class="fgrid">${fld('Novo usuário (login)', inp('usuario', atual, 'autocapitalize="none" autocomplete="off"'), 'A pessoa será desconectada e entra de novo com o novo login.', 'full')}</div>`, {
+    submitText: 'Alterar login',
+    onSubmit: async el => {
+      const usuario = form(el).usuario.toLowerCase().trim();
+      if (!/^[a-z0-9._-]{3,30}$/.test(usuario)) return setErr(el, 'Usuário: 3 a 30 caracteres, só letras minúsculas, números, ponto, hífen ou sublinhado.');
+      const erro = await rpcAdmin('g4_admin_alterar_login', { p_id: id, p_usuario: usuario }); if (erro) return setErr(el, erro);
+      log('Login alterado', `${u.nome}: ${usuario}`); closeModal();
+      if (AUTH.user && id === AUTH.user.id) { toast('Login alterado. Entre de novo com o novo usuário.'); sair(); } else toast('Login alterado.');
+    }
+  });
+}
 const ACT_AUTH = {
-  login: () => doLogin(), esqueci: () => doEsqueci(), salvarRecovery: () => doRecovery(),
+  login: () => doLogin(), salvarRecovery: () => doRecovery(),
   verSenha: el => { $$('#gate input[type=password], #gate input[data-pw]').forEach(i => { i.type = el.checked ? 'text' : 'password'; i.dataset.pw = '1'; }); },
-  logout: () => sair(), changePwd: () => senhaForm(),
-  verificar: async () => { try { await carregarPerfil(); if (SBS.profile && SBS.profile.ativo) { SBS.started = false; await aoMudarSessao(); } else toast('Ainda aguardando a liberação do administrador.'); } catch (e) { toast(msgAuth(e), 'bad'); } scheduleRender(); },
-  newUser: () => openModal('Como adicionar um sócio', `<ol style="margin:0;padding-left:20px;line-height:1.7"><li>No painel do Supabase, abra <b>Authentication &gt; Users &gt; Add user</b>.</li><li>Informe o e-mail e uma senha provisória e marque <b>Auto Confirm User</b>.</li><li>Passe o e-mail e a senha para o sócio. Ele entra em ${esc(location.host || 'o sistema')} e pode trocar a senha no botão "Senha".</li><li>Volte aqui e clique em <b>Liberar acesso</b> na linha dele.</li></ol>`, { footer: true, cancelText: 'Fechar' }),
-  renomearUser: el => { const u = S.data.users[el.dataset.id]; openModal('Nome de ' + u.email, `<div class="fgrid">${fld('Nome', inp('nome', u.nome), '', 'full')}</div>`, { submitText: 'Salvar', onSubmit: async m => { const f = form(m); if (!f.nome) return setErr(m, 'Informe o nome.'); await atualizarPerfil(u.id, { nome: f.nome }, `${u.email}: nome ${f.nome}`); closeModal(); } }); },
+  logout: () => sair(), changePwd: () => senhaForm(false),
+  verificar: async () => { try { await carregarPerfil(); if (SBS.profile && SBS.profile.ativo) { SBS.started = false; await aoMudarSessao(); } else toast('Seu acesso está desativado. Fale com um administrador.'); } catch (e) { toast(msgAuth(e), 'bad'); } scheduleRender(); },
+  newUser: () => novoUsuarioForm(), resetSenha: el => resetSenhaForm(el.dataset.id), loginUser: el => loginUserForm(el.dataset.id),
+  renomearUser: el => { const u = S.data.users[el.dataset.id]; openModal('Nome de ' + u.nome, `<div class="fgrid">${fld('Nome', inp('nome', u.nome), '', 'full')}</div>`, { submitText: 'Salvar', onSubmit: async m => { const f = form(m); if (!f.nome) return setErr(m, 'Informe o nome.'); await atualizarPerfil(u.id, { nome: f.nome }, `${u.usuario}: nome ${f.nome}`); closeModal(); } }); },
   perfilUser: async el => { const u = S.data.users[el.dataset.id], novo = u.perfil === 'admin' ? 'socio' : 'admin'; if (!await confirmBox(`Mudar ${u.nome} para ${PERFIL[novo]}?`)) return; await atualizarPerfil(u.id, { perfil: novo }, `${u.nome}: ${PERFIL[novo]}`); },
-  ativoUser: async el => { const u = S.data.users[el.dataset.id], des = u.ativo; if (!await confirmBox(`${des ? 'Desativar' : 'Liberar'} o acesso de ${u.nome}?`, { submitText: des ? 'Desativar' : 'Liberar acesso', danger: des })) return; await atualizarPerfil(u.id, { ativo: !des }, `${u.nome}: ${des ? 'desativado' : 'liberado'}`); }
+  ativoUser: async el => { const u = S.data.users[el.dataset.id], des = u.ativo; if (!await confirmBox(`${des ? 'Desativar' : 'Reativar'} o acesso de ${u.nome}?`, { submitText: des ? 'Desativar' : 'Reativar', danger: des })) return; await atualizarPerfil(u.id, { ativo: !des }, `${u.nome}: ${des ? 'desativado' : 'reativado'}`); },
+  delUser: async el => { const u = S.data.users[el.dataset.id]; if (!await confirmBox(`Excluir o usuário ${u.nome}? O histórico de ações dele continua registrado.`, { submitText: 'Excluir', danger: true })) return; const erro = await rpcAdmin('g4_admin_excluir_usuario', { p_id: u.id }); if (erro) return toast(erro, 'bad'); log('Usuário excluído', u.nome); toast('Usuário excluído.'); }
 };
 document.addEventListener('keydown', ev => {
   if (ev.key !== 'Enter' || !ev.target.closest || !ev.target.closest('#gate')) return;

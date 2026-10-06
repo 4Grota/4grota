@@ -2098,7 +2098,11 @@ function sbAdapter(sb) {
     doc(path) {
       const [coll, id] = path.split('/'), t = SB_TABLES[coll];
       return {
-        async set(obj) { const { error } = await sb.from(t).upsert({ id, data: obj }, { onConflict: 'id' }); if (error) throw error; },
+        async set(obj) {
+          // o histórico de atividades só aceita inclusão (ninguém edita nem apaga): usa insert, não upsert
+          const { error } = coll === 'log' ? await sb.from(t).insert({ id, data: obj }) : await sb.from(t).upsert({ id, data: obj }, { onConflict: 'id' });
+          if (error) throw error;
+        },
         async delete() { const { error } = await sb.from(t).delete().eq('id', id); if (error) throw error; },
         onSnapshot(next, err) { return watch(coll, snap => { const d = snap.docs.find(x => x.id === id); next({ exists: !!d, data: () => (d ? d.data() : undefined), id }); }, err); }
       };

@@ -645,10 +645,10 @@ C.docsCompletos = c => C.DOCS.every(([k]) => c.docs && c.docs[k]);
 
 /* ---------- configuração ---------- */
 C.DEFAULT_CONFIG = {
-  versao: 5,
+  versao: 6,
   empresa: '4G Rota',
   chavePix: '',
-  plans: { 10: { taxa: 0.15, dia: 0.015 }, 20: { taxa: 0.20, dia: 0.01 }, 30: { taxa: 0.30, dia: 0.01 } },
+  plans: { 10: { taxa: 0.15, dia: 0.015 }, 20: { taxa: 0.20, dia: 0.015 }, 30: { taxa: 0.30, dia: 0.015 } },
   multa: 0.02,
   tolerancia: 0,
   tetoDias: 0,   // 0 = sem limite: o encargo diário continua sendo calculado todo dia
@@ -677,12 +677,14 @@ C.mergeConfig = s0 => {
   const s = JSON.parse(JSON.stringify(s0));
   if (!s.versao || s.versao < 2) { delete s.ladder; delete s.nivel1Planos; delete s.faixas; delete s.valorMinimo; }
   delete s.faixas; // planos não dependem mais do valor do empréstimo
+  if (!s.versao || s.versao < 6) { for (const p in (s.plans || {})) delete s.plans[p].dia; } // nova regra: 1,5% ao dia em todos os planos
   if (!s.versao || s.versao < 5) delete s.tetoDias; // nova regra: sem limite de dias no encargo
   if (!s.versao || s.versao < 3) delete s.tolerancia;   // nova regra: encargos desde o 1º dia de atraso
   for (const k in s) {
     if (k === 'plans') { for (const p in s.plans) d.plans[p] = Object.assign({}, d.plans[p] || {}, s.plans[p]); }
     else d[k] = s[k];
   }
+  d.versao = C.DEFAULT_CONFIG.versao;
   return d;
 };
 

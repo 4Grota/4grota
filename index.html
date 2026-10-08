@@ -91,6 +91,9 @@ input[type=checkbox]{width:20px;height:20px;min-height:0;accent-color:var(--bran
 .alert.warn{background:var(--warn-bg);color:var(--warn-tx)}
 .alert.bad{background:var(--bad-bg);color:var(--bad-tx)}
 .alert.ok{background:var(--ok-bg);color:var(--ok-tx)}
+.wa-wrap{background:#EFE7DB;border-radius:12px;padding:14px;margin:10px 0}
+.wa-bubble{background:#D9FDD3;color:#111B21;border-radius:10px 10px 10px 2px;padding:10px 12px;max-width:520px;font-size:14px;line-height:1.45;box-shadow:0 1px 1px rgba(0,0,0,.18);word-break:break-word}
+.wa-bubble b{font-weight:700}
 .overlay{position:fixed;top:0;right:0;bottom:0;left:0;background:rgba(10,18,14,.55);display:flex;align-items:flex-start;justify-content:center;padding:24px 12px;overflow-y:auto;z-index:20}
 .modal{background:var(--card);border-radius:16px;width:100%;max-width:560px;box-shadow:0 20px 60px rgba(0,0,0,.35);margin:auto 0}
 .modal.wide{max-width:900px}
@@ -648,6 +651,8 @@ C.DEFAULT_CONFIG = {
   versao: 7,
   empresa: '4G Rota',
   chavePix: '',
+  validadeHoras: 24,      // validade da confirmação; 0 = não mostra a linha na mensagem
+  msgCalendario: false,   // incluir calendário de vencimentos na mensagem de confirmação
   plans: { 10: { taxa: 0.15, dia: 0.015 }, 20: { taxa: 0.20, dia: 0.015 }, 30: { taxa: 0.30, dia: 0.015 } },
   multa: 0.02,
   tolerancia: 0,
@@ -979,6 +984,41 @@ C.historicoCliente = (state, clientId, ref) => {
 };
 C.diasDoMes = (ym) => { const [y, m] = ym.split('-').map(Number); const n = new Date(Date.UTC(y, m, 0)).getUTCDate(); const pad2 = v => String(v).padStart(2, '0'); return Array.from({ length: n }, (_, i) => `${ym}-${pad2(i + 1)}`); };
 C.mensagem = (tpl, vars) => String(tpl || '').replace(/\{(\w+)\}/g, (m, k) => (vars[k] != null ? vars[k] : m));
+/* ---------- mensagem de confirmação do empréstimo (WhatsApp) ---------- */
+C.WD = ['dom.', 'seg.', 'ter.', 'qua.', 'qui.', 'sex.', 'sáb.'];
+C.diaSem = s => C.WD[C.dow(s)];
+C.pctN = x => (Math.round(x * 10000) / 100).toString().replace('.', ',');
+C.telValido = t => { let d = C.digits(t); if (d.length >= 12 && d.slice(0, 2) === '55') d = d.slice(2); return d.length === 10 || d.length === 11; };
+C.msgConfirmacao = (loan, cli, cfg) => {
+  const p = loan.parcelas, first = p[0], last = p[p.length - 1], r = loan.regras;
+  const nome = String((cli && cli.nome) || '').replace(/\*/g, '').trim();
+  const emp = String(cfg.empresa || '4G Rota').replace(/\*/g, '');
+  const parc = C.brl(first.valor) + (last.valor !== first.valor ? ` (a última de ${C.brl(last.valor)})` : '');
+  const L = [];
+  L.push(`Olá, *${nome}*! 👋`);
+  L.push(`Aqui é da *${emp}*. Confira os termos do seu empréstimo antes de liberarmos o valor:`);
+  L.push('');
+  L.push(`💰 *Valor liberado:* ${C.brl(loan.valor)}`);
+  L.push(`📆 *Parcelas:* ${p.length} parcelas diárias de ${parc}`);
+  L.push(`📊 *Juros:* ${C.brl(loan.jurosTotal)} (${C.pctN(loan.taxa)}% sobre o valor liberado)`);
+  L.push(`💳 *Total a pagar:* ${C.brl(loan.total)}`);
+  L.push(`📍 *Início dos pagamentos:* ${C.diaSem(first.due)}, ${C.fmtBR(first.due)}`);
+  L.push(`🏁 *Término:* ${C.diaSem(last.due)}, ${C.fmtBR(last.due)}`);
+  L.push(`💸 *Pagamento:* Pix (chave: ${cfg.chavePix || '[informe a chave Pix em Configurações]'})`);
+  if (cfg.msgCalendario) {
+    L.push('');
+    L.push('📅 *Vencimentos:*');
+    p.forEach(x => L.push(`${x.n}) ${C.diaSem(x.due)} ${C.fmtBR(x.due).slice(0, 5)} – ${C.brl(x.valor)}`));
+  }
+  L.push('');
+  L.push(`⚠️ *Atraso:* multa de ${C.pctN(r.multa)}% e encargo de ${C.pctN(r.dia)}% ao dia, desde o 1º dia de atraso.`);
+  L.push('');
+  L.push('Se estiver tudo certo, responda *CONFIRMO* para liberarmos o valor. Se algo estiver diferente do combinado, responda *NÃO* e ajustamos.');
+  const v = parseInt(cfg.validadeHoras, 10);
+  if (v > 0) L.push(`Esta confirmação é válida por ${v} ${v === 1 ? 'hora' : 'horas'}.`);
+  return L.join('\n');
+};
+C.waHtml = t => String(t).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/\*([^*\n]+)\*/g, '<b>$1</b>').replace(/\n/g, '<br>');
 
 g.Core = C;
 if (typeof module !== 'undefined') module.exports = C;
@@ -1534,8 +1574,8 @@ function loanForm(clientId) {
       const loan = p.loan; loan.id = uid(); loan.clientId = p.client.id; loan.criadoPor = ME.id; loan.criadoEm = C.today();
       put('loans', loan.id, loan);
       log('Empréstimo registrado', `${p.client.nome}: ${brl(loan.valor)} em ${loan.plano}x`);
-      closeModal(); toast('Empréstimo registrado. Lembre-se de enviar o Pix de ' + brl(loan.valor) + '.');
-      runAutomations(true); openLoan(loan.id);
+      closeModal(); toast('Empréstimo registrado. Envie a confirmação ao cliente antes de liberar o Pix.');
+      runAutomations(true); openLoan(loan.id, true);
     }
   });
   $('#lp', topModal().el).innerHTML = loanCheck(topModal().el).html;
@@ -1565,8 +1605,30 @@ function loanCheck(el, o = {}) {
   html = pre + html + erros.map(e => `<div class="alert bad" style="margin-top:10px">${esc(e)}</div>`).join('') + avisos.map(a => `<div class="alert warn" style="margin-top:10px">${esc(a)}</div>`).join('');
   return { erros, avisos, loan, client: c, html };
 }
+function confirmBlock(l, c, novo) {
+  if (l.cancelada) return '';
+  const cfg = getCfg(), txt = C.msgConfirmacao(l, c, cfg), ok = C.telValido(c.tel);
+  const href = ok ? C.waLink(c.tel, txt) : 'https://wa.me/?text=' + encodeURIComponent(txt);
+  return `<div class="card" style="margin:14px 0">
+    <h3 style="margin:0 0 4px">Mensagem de confirmação</h3>
+    <p class="muted small" style="margin:0 0 10px">Envie ao cliente antes de liberar o Pix. Só libere o valor depois que ele responder <b>CONFIRMO</b>.</p>
+    ${novo ? `<div class="alert ok">Empréstimo registrado. Copie a mensagem abaixo, envie ao cliente e aguarde o CONFIRMO antes de enviar o Pix de ${brl(l.valor)}.</div>` : ''}
+    ${!cfg.chavePix ? `<div class="alert warn">Informe a chave Pix da empresa em Configurações para ela aparecer na mensagem.</div>` : ''}
+    ${!ok ? `<div class="alert warn">Este cliente não tem telefone válido cadastrado. O WhatsApp vai abrir sem contato: escolha o contato lá.</div>` : ''}
+    <div class="wa-wrap"><div class="wa-bubble">${C.waHtml(txt)}</div></div>
+    <div class="row"><button class="btn pri" data-act="copyConfirm" data-id="${l.id}">Copiar mensagem</button><a class="btn" target="_blank" rel="noopener noreferrer" href="${esc(href)}">Abrir no WhatsApp</a></div>
+  </div>`;
+}
+async function copyTxt(t) {
+  try { if (navigator.clipboard && navigator.clipboard.writeText) { await navigator.clipboard.writeText(t); return true; } } catch (e) { /* tenta o método antigo */ }
+  try {
+    const ta = document.createElement('textarea'); ta.value = t; ta.setAttribute('readonly', ''); ta.style.cssText = 'position:fixed;top:0;left:0;opacity:0';
+    document.body.appendChild(ta); ta.select(); ta.setSelectionRange(0, t.length);
+    const ok = document.execCommand('copy'); document.body.removeChild(ta); return !!ok;
+  } catch (e) { return false; }
+}
 const TIPO_ENC = { acordo: 'Quitação por acordo', perda: 'Baixa por perda' };
-function loanBody(id) {
+function loanBody(id, novo) {
   const l = S.data.loans[id]; if (!l) return '<div class="empty">Contrato não encontrado.</div>';
   const D = derived(), c = S.data.clients[l.clientId] || { nome: '(removido)' }, s = C.loanSummary(l, D.ref);
   const pays = [];
@@ -1577,6 +1639,7 @@ function loanBody(id) {
     <button class="btn" data-act="editLoan" data-id="${id}">Editar contrato</button>
     ${!s.quitado ? `<button class="btn dng" data-act="encerrar" data-id="${id}">Encerrar contrato</button>` : ''}
     ${l.encerramento ? `<button class="btn" data-act="reabrir" data-id="${id}">Reabrir contrato</button>` : ''}</div>
+  ${confirmBlock(l, c, novo)}
   <div class="kv"><div><b>Valor emprestado</b>${brl(l.valor)}</div><div><b>Plano</b>${l.plano}x · juros ${C.fmtPct(l.taxa)} (${brl(l.jurosTotal)})</div><div><b>Total a pagar</b>${brl(l.total)}</div>
   <div><b>Liberado em</b>${C.fmtBR(l.liberadoEm)}</div><div><b>Saldo das parcelas</b>${brl(s.saldo)}</div><div><b>Encargos hoje</b>${brl(s.enc)}</div>
   <div><b>Total para quitar hoje</b>${brl(s.totalDevido)}</div><div><b>Regras</b><span class="small">multa ${C.fmtPct(l.regras.multa)} · ${C.fmtPct(l.regras.dia)}/dia · tolerância ${l.regras.tolerancia}d · ${l.regras.teto ? 'limite ' + l.regras.teto + 'd' : 'sem limite de dias'}</span></div></div>
@@ -1591,7 +1654,7 @@ function loanBody(id) {
   ${(l.edicoes || []).length ? `<div class="sec-h">Alterações do contrato</div>${l.edicoes.slice().reverse().map(e => `<div class="small" style="padding:3px 0"><b>${C.fmtBR(e.data)}</b> · ${esc(e.texto)} <span class="muted">(${esc(nameOf(e.por))})</span></div>`).join('')}` : ''}
 `;
 }
-function openLoan(id) { openModal('Contrato', loanBody(id), { wide: true, footer: false, noFocus: true, rebuild: () => loanBody(id), lid: id }); }
+function openLoan(id, novo) { openModal('Contrato', loanBody(id, novo), { wide: true, footer: false, noFocus: true, rebuild: () => loanBody(id, novo), lid: id }); }
 
 function cfgForEdit(loan, n) {
   const cfg = getCfg();
@@ -2373,7 +2436,7 @@ function pConfig() {
   let h = `<div class="page-h"><h1>Configurações</h1><div class="sp"></div><button class="btn pri" data-act="saveCfg">Salvar configurações</button></div>
   <div class="alert warn">Mudanças valem para <b>novos</b> empréstimos. Os contratos já registrados mantêm as taxas e regras de quando foram criados.</div>
   <div class="grid two">
-  <div class="card"><h3>Empresa</h3><div class="fgrid">${fld('Nome', inp('empresa', cfg.empresa))}${fld('Chave Pix para receber', inp('chavePix', cfg.chavePix), 'Entra nas mensagens de cobrança.')}</div></div>
+  <div class="card"><h3>Empresa</h3><div class="fgrid">${fld('Nome da empresa (aparece nas mensagens)', inp('empresa', cfg.empresa))}${fld('Chave Pix para receber', inp('chavePix', cfg.chavePix), 'Entra nas mensagens de cobrança e de confirmação.')}${fld('Validade da confirmação (horas)', inp('validadeHoras', cfg.validadeHoras, 'inputmode="numeric"'), '0 = a linha de validade some da mensagem.')}<label class="chk full"><input type="checkbox" data-f="msgCalendario" ${cfg.msgCalendario ? 'checked' : ''}> Incluir o calendário de vencimentos (uma linha por parcela) na mensagem de confirmação</label></div></div>
   <div class="card"><h3>Planos e juros</h3><div class="fgrid">${pl.map(n => fld(`Plano ${n}x · juros (%)`, inp('taxa' + n, pc(cfg.plans[n].taxa), 'inputmode="decimal"'), 'Sobre o valor emprestado, cobrado uma vez.') + fld(`Plano ${n}x · encargo por dia de atraso (%)`, inp('dia' + n, pc(cfg.plans[n].dia), 'inputmode="decimal"'))).join('')}</div></div>
   <div class="card"><h3>Atraso</h3><div class="fgrid">${fld('Multa (%)', inp('multa', pc(cfg.multa), 'inputmode="decimal"'), 'Uma vez por parcela vencida.')}${fld('Tolerância (dias)', inp('tolerancia', cfg.tolerancia, 'inputmode="numeric"'), '0 = multa e encargo desde o 1º dia de atraso.')}${fld('Limite de dias do encargo diário', inp('tetoDias', cfg.tetoDias, 'inputmode="numeric"'), '0 = sem limite: o encargo continua sendo calculado todo dia.')}${fld('Vencimento antecipado após (dias)', inp('vencAntecipadoDias', cfg.vencAntecipadoDias, 'inputmode="numeric"'), 'Saldo todo exigível.')}${fld('Contagem das parcelas', sel('contagem', [['corridos', 'Dias corridos'], ['seg-sab', 'Segunda a sábado'], ['seg-sex', 'Dias úteis (seg a sex)']], cfg.contagem), '', 'full')}</div></div>
   <div class="card"><h3>Escada de crédito</h3><div class="fgrid">${fld('Limite máximo de cada nível (R$)', inp('ladder', cfg.ladder.map(v => (v / 100).toFixed(2).replace('.', ',')).join('; ')), 'Separe por ponto e vírgula. O último é o teto.', 'full')}${fld('Valor mínimo do empréstimo (R$)', inp('valorMinimo', (cfg.valorMinimo / 100).toFixed(2).replace('.', ','), 'inputmode="decimal"'), '', 'full')}${fld('Faixa inicial de cada nível (R$)', inp('ladderMin', (cfg.ladderMin || []).map(x => (x / 100).toFixed(2).replace('.', ',')).join('; ')), 'Só para exibir (ex.: 300; 600; 800). O teto de cada nível é o limite máximo acima.', 'full')}<p class="muted small full" style="margin:0">Os planos 10x, 20x e 30x valem para qualquer valor. O juros depende só do plano escolhido.</p>${fld('Comprometimento máx. do ganho diário (%)', inp('comprometimentoMax', pc(cfg.comprometimentoMax), 'inputmode="decimal"'))}${fld('Exposição máx. por cliente (% do capital)', inp('exposicaoMax', pc(cfg.exposicaoMax), 'inputmode="decimal"'))}</div></div>
@@ -2392,6 +2455,8 @@ function saveCfg() {
   if (BACKEND === 'supabase' && !isAdmin()) return toast('Somente administradores alteram as configurações.', 'bad');
   const f = form($('#app')), cur = getCfg(), n = clone(cur), erros = [];
   n.empresa = f.empresa || '4G Rota'; n.chavePix = f.chavePix;
+  { const vh = parseInt(f.validadeHoras, 10); if (isNaN(vh) || vh < 0) erros.push('Validade da confirmação inválida.'); else n.validadeHoras = vh; }
+  n.msgCalendario = !!f.msgCalendario;
   Object.keys(n.plans).forEach(k => {
     const t = C.parsePct(f['taxa' + k]), d = C.parsePct(f['dia' + k]);
     if (isNaN(t) || t < 0 || isNaN(d) || d < 0) erros.push('Plano ' + k + 'x: valores inválidos.'); else n.plans[k] = { taxa: t, dia: d };
@@ -2406,7 +2471,7 @@ function saveCfg() {
   if (!lad.length) erros.push('Informe ao menos um nível na escada.'); else n.ladder = [...new Set(lad)].sort((a, b) => a - b);
   const vm = C.parseMoney(f.valorMinimo); if (isNaN(vm) || vm <= 0) erros.push('Valor mínimo inválido.'); else n.valorMinimo = vm;
   const lm = f.ladderMin ? f.ladderMin.split(/[;]/).map(x => C.parseMoney(x)).filter(x => x > 0) : []; n.ladderMin = lm;
-  delete n.faixas; delete n.nivel1Planos; n.versao = 5;
+  delete n.faixas; delete n.nivel1Planos; n.versao = C.DEFAULT_CONFIG.versao;
   n.aprovacaoAutomatica = !!f.aprovacaoAutomatica; n.msgCobranca = f.msgCobranca; n.msgLembrete = f.msgLembrete;
   if (erros.length) return toast(erros[0], 'bad');
   put('config', 'main', n); log('Configurações alteradas', 'Parâmetros do sistema atualizados'); toast('Configurações salvas.'); runAutomations();
@@ -2450,6 +2515,7 @@ const ACT = {
   newLoan: () => loanForm(),
   newLoanFor: el => { closeModal(); loanForm(el.dataset.id); },
   openLoan: el => openLoan(el.dataset.id),
+  copyConfirm: async el => { const l = S.data.loans[el.dataset.id]; if (!l) return; const ok = await copyTxt(C.msgConfirmacao(l, S.data.clients[l.clientId] || { nome: '' }, getCfg())); toast(ok ? 'Mensagem copiada. É só colar no WhatsApp.' : 'Não consegui copiar. Selecione o texto do balão e copie.', ok ? undefined : 'bad'); },
   editLoan: el => editLoanForm(el.dataset.id),
   encerrar: el => encerrarForm(el.dataset.id),
   editPag: el => editPagForm(el.dataset.loan, Number(el.dataset.idx), el.dataset.pag),

@@ -651,6 +651,7 @@ C.DEFAULT_CONFIG = {
   versao: 7,
   empresa: '4G Rota',
   chavePix: '',
+  beneficiario: '',       // nome do titular da chave Pix (aparece na confirmação)
   validadeHoras: 24,      // validade da confirmação; 0 = não mostra a linha na mensagem
   msgCalendario: false,   // incluir calendário de vencimentos na mensagem de confirmação
   plans: { 10: { taxa: 0.15, dia: 0.015 }, 20: { taxa: 0.20, dia: 0.015 }, 30: { taxa: 0.30, dia: 0.015 } },
@@ -1005,6 +1006,8 @@ C.msgConfirmacao = (loan, cli, cfg) => {
   L.push(`📍 *Início dos pagamentos:* ${C.diaSem(first.due)}, ${C.fmtBR(first.due)}`);
   L.push(`🏁 *Término:* ${C.diaSem(last.due)}, ${C.fmtBR(last.due)}`);
   L.push(`💸 *Pagamento:* Pix (chave: ${cfg.chavePix || '[informe a chave Pix em Configurações]'})`);
+  const ben = String(cfg.beneficiario || '').replace(/\*/g, '').trim();
+  if (ben) L.push(`👤 *Beneficiário:* ${ben}`);
   if (cfg.msgCalendario) {
     L.push('');
     L.push('📅 *Vencimentos:*');
@@ -1613,7 +1616,7 @@ function confirmBlock(l, c, novo) {
     <h3 style="margin:0 0 4px">Mensagem de confirmação</h3>
     <p class="muted small" style="margin:0 0 10px">Envie ao cliente antes de liberar o Pix. Só libere o valor depois que ele responder <b>CONFIRMO</b>.</p>
     ${novo ? `<div class="alert ok">Empréstimo registrado. Copie a mensagem abaixo, envie ao cliente e aguarde o CONFIRMO antes de enviar o Pix de ${brl(l.valor)}.</div>` : ''}
-    ${!cfg.chavePix ? `<div class="alert warn">Informe a chave Pix da empresa em Configurações para ela aparecer na mensagem.</div>` : ''}
+    ${!cfg.chavePix || !cfg.beneficiario ? `<div class="alert warn">Informe a chave Pix e o nome do beneficiário em Configurações para entrarem na mensagem.</div>` : ''}
     ${!ok ? `<div class="alert warn">Este cliente não tem telefone válido cadastrado. O WhatsApp vai abrir sem contato: escolha o contato lá.</div>` : ''}
     <div class="wa-wrap"><div class="wa-bubble">${C.waHtml(txt)}</div></div>
     <div class="row"><button class="btn pri" data-act="copyConfirm" data-id="${l.id}">Copiar mensagem</button><a class="btn" target="_blank" rel="noopener noreferrer" href="${esc(href)}">Abrir no WhatsApp</a></div>
@@ -2436,7 +2439,7 @@ function pConfig() {
   let h = `<div class="page-h"><h1>Configurações</h1><div class="sp"></div><button class="btn pri" data-act="saveCfg">Salvar configurações</button></div>
   <div class="alert warn">Mudanças valem para <b>novos</b> empréstimos. Os contratos já registrados mantêm as taxas e regras de quando foram criados.</div>
   <div class="grid two">
-  <div class="card"><h3>Empresa</h3><div class="fgrid">${fld('Nome da empresa (aparece nas mensagens)', inp('empresa', cfg.empresa))}${fld('Chave Pix para receber', inp('chavePix', cfg.chavePix), 'Entra nas mensagens de cobrança e de confirmação.')}${fld('Validade da confirmação (horas)', inp('validadeHoras', cfg.validadeHoras, 'inputmode="numeric"'), '0 = a linha de validade some da mensagem.')}<label class="chk full"><input type="checkbox" data-f="msgCalendario" ${cfg.msgCalendario ? 'checked' : ''}> Incluir o calendário de vencimentos (uma linha por parcela) na mensagem de confirmação</label></div></div>
+  <div class="card"><h3>Empresa</h3><div class="fgrid">${fld('Nome da empresa (aparece nas mensagens)', inp('empresa', cfg.empresa))}${fld('Chave Pix para receber', inp('chavePix', cfg.chavePix), 'Entra nas mensagens de cobrança e de confirmação.')}${fld('Nome do beneficiário da chave Pix', inp('beneficiario', cfg.beneficiario), 'Nome que o cliente vê ao pagar. Entra na confirmação.')}${fld('Validade da confirmação (horas)', inp('validadeHoras', cfg.validadeHoras, 'inputmode="numeric"'), '0 = a linha de validade some da mensagem.')}<label class="chk full"><input type="checkbox" data-f="msgCalendario" ${cfg.msgCalendario ? 'checked' : ''}> Incluir o calendário de vencimentos (uma linha por parcela) na mensagem de confirmação</label></div></div>
   <div class="card"><h3>Planos e juros</h3><div class="fgrid">${pl.map(n => fld(`Plano ${n}x · juros (%)`, inp('taxa' + n, pc(cfg.plans[n].taxa), 'inputmode="decimal"'), 'Sobre o valor emprestado, cobrado uma vez.') + fld(`Plano ${n}x · encargo por dia de atraso (%)`, inp('dia' + n, pc(cfg.plans[n].dia), 'inputmode="decimal"'))).join('')}</div></div>
   <div class="card"><h3>Atraso</h3><div class="fgrid">${fld('Multa (%)', inp('multa', pc(cfg.multa), 'inputmode="decimal"'), 'Uma vez por parcela vencida.')}${fld('Tolerância (dias)', inp('tolerancia', cfg.tolerancia, 'inputmode="numeric"'), '0 = multa e encargo desde o 1º dia de atraso.')}${fld('Limite de dias do encargo diário', inp('tetoDias', cfg.tetoDias, 'inputmode="numeric"'), '0 = sem limite: o encargo continua sendo calculado todo dia.')}${fld('Vencimento antecipado após (dias)', inp('vencAntecipadoDias', cfg.vencAntecipadoDias, 'inputmode="numeric"'), 'Saldo todo exigível.')}${fld('Contagem das parcelas', sel('contagem', [['corridos', 'Dias corridos'], ['seg-sab', 'Segunda a sábado'], ['seg-sex', 'Dias úteis (seg a sex)']], cfg.contagem), '', 'full')}</div></div>
   <div class="card"><h3>Escada de crédito</h3><div class="fgrid">${fld('Limite máximo de cada nível (R$)', inp('ladder', cfg.ladder.map(v => (v / 100).toFixed(2).replace('.', ',')).join('; ')), 'Separe por ponto e vírgula. O último é o teto.', 'full')}${fld('Valor mínimo do empréstimo (R$)', inp('valorMinimo', (cfg.valorMinimo / 100).toFixed(2).replace('.', ','), 'inputmode="decimal"'), '', 'full')}${fld('Faixa inicial de cada nível (R$)', inp('ladderMin', (cfg.ladderMin || []).map(x => (x / 100).toFixed(2).replace('.', ',')).join('; ')), 'Só para exibir (ex.: 300; 600; 800). O teto de cada nível é o limite máximo acima.', 'full')}<p class="muted small full" style="margin:0">Os planos 10x, 20x e 30x valem para qualquer valor. O juros depende só do plano escolhido.</p>${fld('Comprometimento máx. do ganho diário (%)', inp('comprometimentoMax', pc(cfg.comprometimentoMax), 'inputmode="decimal"'))}${fld('Exposição máx. por cliente (% do capital)', inp('exposicaoMax', pc(cfg.exposicaoMax), 'inputmode="decimal"'))}</div></div>
@@ -2454,7 +2457,7 @@ function pConfig() {
 function saveCfg() {
   if (BACKEND === 'supabase' && !isAdmin()) return toast('Somente administradores alteram as configurações.', 'bad');
   const f = form($('#app')), cur = getCfg(), n = clone(cur), erros = [];
-  n.empresa = f.empresa || '4G Rota'; n.chavePix = f.chavePix;
+  n.empresa = f.empresa || '4G Rota'; n.chavePix = f.chavePix; n.beneficiario = (f.beneficiario || '').trim();
   { const vh = parseInt(f.validadeHoras, 10); if (isNaN(vh) || vh < 0) erros.push('Validade da confirmação inválida.'); else n.validadeHoras = vh; }
   n.msgCalendario = !!f.msgCalendario;
   Object.keys(n.plans).forEach(k => {

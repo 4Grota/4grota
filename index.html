@@ -645,7 +645,7 @@ C.docsCompletos = c => C.DOCS.every(([k]) => c.docs && c.docs[k]);
 
 /* ---------- configuração ---------- */
 C.DEFAULT_CONFIG = {
-  versao: 6,
+  versao: 7,
   empresa: '4G Rota',
   chavePix: '',
   plans: { 10: { taxa: 0.15, dia: 0.015 }, 20: { taxa: 0.20, dia: 0.015 }, 30: { taxa: 0.30, dia: 0.015 } },
@@ -659,7 +659,7 @@ C.DEFAULT_CONFIG = {
   // faixa inicial de cada nível (só para exibição: 300 a 500, 600 a 700, 800 a 1.000)
   ladderMin: [30000, 60000, 80000],
   // os planos (10x, 20x, 30x) valem para qualquer valor; o juros depende só do plano
-  contagem: 'corridos',
+  contagem: 'seg-sab',
   comprometimentoMax: 0.08,
   exposicaoMax: 0.10,
   subirMaxParcelasAtrasadas: 2,
@@ -677,6 +677,7 @@ C.mergeConfig = s0 => {
   const s = JSON.parse(JSON.stringify(s0));
   if (!s.versao || s.versao < 2) { delete s.ladder; delete s.nivel1Planos; delete s.faixas; delete s.valorMinimo; }
   delete s.faixas; // planos não dependem mais do valor do empréstimo
+  if (!s.versao || s.versao < 7) delete s.contagem; // nova regra: parcelas de segunda a sábado
   if (!s.versao || s.versao < 6) { for (const p in (s.plans || {})) delete s.plans[p].dia; } // nova regra: 1,5% ao dia em todos os planos
   if (!s.versao || s.versao < 5) delete s.tetoDias; // nova regra: sem limite de dias no encargo
   if (!s.versao || s.versao < 3) delete s.tolerancia;   // nova regra: encargos desde o 1º dia de atraso

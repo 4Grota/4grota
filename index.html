@@ -1375,12 +1375,74 @@ function lastContact(c) {
   if (k.promessa) t += `<br>${chip(k.promessa < C.today() ? 'bad' : 'warn', (k.promessa < C.today() ? 'Promessa vencida ' : 'Promete ') + C.fmtBR(k.promessa))}`;
   return `<span class="small">${t}</span>`;
 }
+/* ---- Fila do dia (envio em 1 clique pelo WhatsApp do aparelho) ---- */
+function filaItens(D) {
+  const hoje = C.today(), out = [];
+  D.abertos.forEach(x => {
+    const s = x.sum, c = x.client; if (!c || !c.id || !S.data.clients[c.id]) return;
+    const tipo = s.maxAtraso > 0 ? 'atraso' : (s.venceHoje > 0 ? 'hoje' : null); if (!tipo) return;
+    const ks = (c.contatos || []).filter(k => k.data === hoje && k.fila);
+    const k = ks.length ? ks[ks.length - 1] : null;
+    out.push({ x, c, tipo, k, estado: k ? (k.fila === 'pulado' ? 'pulado' : 'enviado') : 'pendente', tel: C.telValido(c.tel) });
+  });
+  out.sort((a, b) => (a.tipo === b.tipo ? (a.tipo === 'atraso' ? b.x.sum.maxAtraso - a.x.sum.maxAtraso : a.c.nome.localeCompare(b.c.nome)) : (a.tipo === 'atraso' ? -1 : 1)));
+  return out;
+}
+function filaRotulo(it) { return it.tipo === 'hoje' ? 'Lembrete' : (UI.filaTotal ? 'Cobrança com total' : 'Cobrança'); }
+function filaMsg(D, it) {
+  const { x, c, tipo } = it;
+  if (tipo === 'hoje') return waText(D.cfg, c, x.loan, x.sum, 'hoje');
+  return UI.filaTotal ? waTotal(D.cfg, c, x.loan, x.sum) : waText(D.cfg, c, x.loan, x.sum, 'atraso');
+}
+function filaMarcar(id, estado, rotulo) {
+  const c = S.data.clients[id]; if (!c) return;
+  const n = clone(c); n.contatos = n.contatos || [];
+  n.contatos.push({ data: C.today(), canal: 'WhatsApp', resultado: estado === 'pulado' ? 'Pulado na fila do dia' : 'Mensagem enviada pela fila do dia (' + rotulo + ')', promessa: '', por: ME.id, fila: estado, hora: new Date().toTimeString().slice(0, 5) });
+  put('clients', id, n);
+}
+function filaEnviarItem(it, D) {
+  if (!it.tel) return toast('Este cliente não tem telefone válido cadastrado.', 'bad');
+  window.open(C.waLink(it.c.tel, filaMsg(D, it)), '_blank', 'noopener');
+  filaMarcar(it.c.id, 'enviado', filaRotulo(it));
+}
+function cobSeg(kind) {
+  const n = filaItens(derived()).filter(i => i.estado === 'pendente').length;
+  const b = (v, l) => `<button data-act="cobTab" data-v="${v}" class="${kind === v ? 'on' : ''}">${l}</button>`;
+  return `<div class="seg">${b('atrasados', 'Em atraso')}${b('hoje', 'Vencem hoje')}${b('fila', 'Fila do dia' + (n ? ' (' + n + ')' : ''))}</div>`;
+}
+function pFila() {
+  const D = derived(), its = filaItens(D);
+  const env = its.filter(i => i.estado === 'enviado').length, pul = its.filter(i => i.estado === 'pulado').length;
+  const pend = its.filter(i => i.estado === 'pendente'), prox = pend.find(i => i.tel);
+  const feitos = env + pul, pct = its.length ? Math.round(feitos / its.length * 100) : 0;
+  const modo = (v, l) => `<button data-act="filaModo" data-v="${v}" class="${(!!UI.filaTotal) === v ? 'on' : ''}">${l}</button>`;
+  let h = `<div class="page-h"><h1>Cobrança</h1><div class="sp"></div><button class="btn pri" data-act="filaProximo" ${prox ? '' : 'disabled'}>Enviar próximo</button></div>
+  <div class="toolbar">${cobSeg('fila')}
+  <div class="seg" title="Tipo de mensagem para quem está em atraso">${modo(false, 'Cobrança simples')}${modo(true, 'Cobrança com total')}</div>
+  <span class="muted small">${env} enviada(s) · ${pul} pulada(s) · ${pend.length} pendente(s) · ${its.length} no total</span></div>
+  <div class="bar" style="margin:6px 0 14px"><span class="b" style="flex:1"><i style="width:${pct}%"></i></span><span class="v">${pct}%</span></div>
+  <div class="alert warn">Cada <b>Enviar</b> abre a conversa no WhatsApp do aparelho já com a mensagem pronta. Você toca em enviar lá e volta. A linha é marcada como enviada ao abrir a conversa; se você não enviar, use <b>Desfazer</b>.</div>`;
+  h += tbl([['Cliente'], ['Situação'], ['Mensagem'], ['Valor', 'num'], ['Status'], ['', 'act']],
+    its.map(it => {
+      const s = it.x.sum, c = it.c, at = it.tipo === 'atraso';
+      const valor = at ? s.vencidoValor + s.vencidoEnc + (UI.filaTotal ? s.aReceberHoje : 0) : s.aReceberHoje;
+      const st = it.estado === 'enviado' ? chip('ok', 'Enviada ' + (it.k.hora || '')) + `<div class="muted small">${esc(nameOf(it.k.por))}</div>` : it.estado === 'pulado' ? chip('warn', 'Pulada') : (it.tel ? '<span class="muted">Pendente</span>' : chip('bad', 'Sem telefone'));
+      let ac = '';
+      if (it.estado === 'pendente') ac = (it.tel ? `<button class="btn sm pri" data-act="filaEnviar" data-id="${c.id}">Enviar</button>` : '') + `<button class="btn sm" data-act="filaPular" data-id="${c.id}">Pular</button>`;
+      else if (it.estado === 'enviado') ac = `<button class="btn sm" data-act="filaEnviar" data-id="${c.id}">Enviar de novo</button><button class="btn sm" data-act="filaDesfazer" data-id="${c.id}">Desfazer</button>`;
+      else ac = `<button class="btn sm" data-act="filaDesfazer" data-id="${c.id}">Desfazer</button>`;
+      return `<tr><td><a href="#" data-act="openClient" data-id="${c.id}"><b>${esc(c.nome)}</b></a><div class="muted small">${esc(C.fmtTel(c.tel))}</div></td>
+      <td>${at ? chip('bad', s.maxAtraso + ' dia(s) de atraso') : chip('warn', 'Vence hoje')}</td><td class="small">${filaRotulo(it)}</td><td class="num"><b>${brl(valor)}</b></td><td>${st}</td><td class="act">${ac}</td></tr>`;
+    }), 'Nada para enviar hoje: ninguém em atraso nem com parcela vencendo.');
+  return h;
+}
 function pCobranca() {
+  if (UI.cobTab === 'fila') return pFila();
   const D = derived(), kind = UI.cobTab;
   const rows = cobRows(D, kind);
   const totalV = rows.reduce((s, x) => s + (kind === 'hoje' ? x.sum.aReceberHoje : x.sum.vencidoValor + x.sum.vencidoEnc), 0);
   let h = `<div class="page-h"><h1>Cobrança</h1><div class="sp"></div>${kind === 'atrasados' ? '<button class="btn" data-act="csvCob">Exportar CSV</button>' : ''}</div>
-  <div class="toolbar"><div class="seg"><button data-act="cobTab" data-v="atrasados" class="${kind === 'atrasados' ? 'on' : ''}">Em atraso</button><button data-act="cobTab" data-v="hoje" class="${kind === 'hoje' ? 'on' : ''}">Vencem hoje</button></div>
+  <div class="toolbar">${cobSeg(kind)}
   <input type="search" placeholder="Buscar cliente, CPF ou telefone" value="${esc(UI.busca.cob)}" data-keep="cobBusca" data-busca="cob">
   ${kind === 'atrasados' ? `<select data-filtro="cob" aria-label="Faixa de atraso">${[['todos', 'Todas as faixas'], ['tolerancia', 'Em tolerância'], ['atrasado', 'Atrasados'], ['critico', 'Vencidos (saldo todo exigível)']].map(([v, l]) => `<option value="${v}" ${UI.cobFiltro === v ? 'selected' : ''}>${l}</option>`).join('')}</select>` : ''}
   <span class="muted small">${rows.length} cliente(s) · ${brl(totalV)}</span></div>`;
@@ -2537,6 +2599,15 @@ async function importJson(file) {
 const ACT = {
   tab: el => { UI.tab = el.dataset.tab; store.set(LS + ':tab', UI.tab); render(); if (window.scrollTo) window.scrollTo(0, 0); },
   cobTab: el => { UI.cobTab = el.dataset.v; render(); },
+  filaModo: el => { UI.filaTotal = el.dataset.v === 'true'; render(); },
+  filaEnviar: el => { const D = derived(), it = filaItens(D).find(i => i.c.id === el.dataset.id); if (it) filaEnviarItem(it, D); },
+  filaProximo: () => { const D = derived(), it = filaItens(D).find(i => i.estado === 'pendente' && i.tel); if (it) filaEnviarItem(it, D); else toast('Não há mais envios pendentes.'); },
+  filaPular: el => filaMarcar(el.dataset.id, 'pulado'),
+  filaDesfazer: el => {
+    const c = S.data.clients[el.dataset.id]; if (!c) return; const hoje = C.today(), n = clone(c); n.contatos = n.contatos || [];
+    for (let i = n.contatos.length - 1; i >= 0; i--) if (n.contatos[i].data === hoje && n.contatos[i].fila) { n.contatos.splice(i, 1); break; }
+    put('clients', n.id, n);
+  },
   newClient: () => clientForm(),
   editClient: el => { closeModal(); clientForm(el.dataset.id); },
   openClient: (el, ev) => { ev.preventDefault(); openClient(el.dataset.id); },

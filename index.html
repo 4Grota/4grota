@@ -1173,6 +1173,22 @@ function waText(cfg, client, loan, sum, kind) {
   });
 }
 
+function waTotal(cfg, client, loan, sum) {
+  const hoje = sum.aReceberHoje || 0, atr = sum.vencidoValor || 0, enc = sum.vencidoEnc || 0;
+  const L = [`Olá, ${firstName(client.nome)}! Aqui é da ${cfg.empresa || '4G Rota'}. 👋`, 'Para deixar seu empréstimo em dia hoje, o valor é:', ''];
+  L.push(`📌 ${sum.vencidoQtd === 1 ? 'Parcela em atraso' : 'Parcelas em atraso (' + sum.vencidoQtd + ')'}: ${brl(atr)}`);
+  loan.parcelas.forEach((p, i) => { const q = sum.infos[i]; if (!q.quit && q.atraso > 0) L.push(`• ${C.diaSem(p.due)} ${C.fmtBR(p.due).slice(0, 5)} (parcela ${p.n}/${loan.plano}) – ${brl(q.saldo)}`); });
+  L.push(`⚠️ Multa e encargos por atraso: ${brl(enc)}`);
+  if (hoje > 0) L.push(`📆 Parcela de hoje: ${brl(hoje)}`);
+  L.push(`💳 Total para regularizar hoje: ${brl(atr + enc + hoje)}`);
+  L.push('');
+  L.push(`💸 Pix (chave: ${cfg.chavePix || '[chave Pix]'})`);
+  if (cfg.beneficiario) L.push(`👤 Beneficiário: ${cfg.beneficiario}`);
+  L.push('');
+  L.push('O encargo aumenta a cada dia de atraso. Pode nos enviar o comprovante quando pagar? Qualquer dúvida, é só falar.');
+  return L.join('\n');
+}
+
 /* ---------------- automações de crédito ---------------- */
 function applyApproval(a, por) {
   const c = S.data.clients[a.clientId]; if (!c) return;
@@ -1366,7 +1382,7 @@ function pCobranca() {
         <td class="small">${brl(x.loan.valor)} em ${x.loan.plano}x</td><td class="num">${s.vencidoQtd}</td><td class="num"><b>${s.maxAtraso}</b></td>
         <td class="num">${brl(s.vencidoValor)}</td><td class="num">${brl(s.vencidoEnc)}</td><td class="num"><b>${brl(s.vencidoValor + s.vencidoEnc)}</b></td>
         <td>${loanChip(s.status)}${venc ? `<div class="small muted">Saldo todo exigível: ${brl(s.totalDevido)}</div>` : ''}</td><td>${lastContact(c)}</td>
-        <td class="act"><a class="btn sm" target="_blank" rel="noopener noreferrer" href="${esc(C.waLink(c.tel, waText(D.cfg, c, x.loan, s, 'atraso')))}">WhatsApp</a><button class="btn sm" data-act="contato" data-id="${c.id}">Contato</button><button class="btn sm pri" data-act="pay" data-loan="${x.loan.id}">Receber</button></td></tr>`;
+        <td class="act"><div style="display:flex;flex-wrap:wrap;gap:4px;justify-content:flex-end;min-width:210px"><a class="btn sm" target="_blank" rel="noopener noreferrer" href="${esc(C.waLink(c.tel, waText(D.cfg, c, x.loan, s, 'atraso')))}">WhatsApp</a><a class="btn sm" target="_blank" rel="noopener noreferrer" title="Mensagem com o total para regularizar hoje (atraso + encargos + parcela de hoje)" href="${esc(C.waLink(c.tel, waTotal(D.cfg, c, x.loan, s)))}">Cobrar total</a><button class="btn sm" data-act="contato" data-id="${c.id}">Contato</button><button class="btn sm pri" data-act="pay" data-loan="${x.loan.id}">Receber</button></div></td></tr>`;
       }), 'Nenhum cliente em atraso com esse filtro.');
   } else {
     h += tbl([['Cliente'], ['Parcela', 'num'], ['Valor', 'num'], ['Contrato'], ['', 'act']],

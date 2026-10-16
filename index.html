@@ -1259,9 +1259,32 @@ function migrarTeto() {
   const nc = clone(getCfg()); nc.migTeto0 = true; nc.versao = 5; put('config', 'main', nc);
   if (n) log('Limite de dias do encargo removido', n + ' contrato(s) ajustado(s)');
 }
+// aumento de limite ligado a um contrato que deixou de estar quitado (ex.: pagamento estornado) volta ao estado anterior
+function reverterAumentos() {
+  const out = [], ref = C.today();
+  Object.values(S.data.approvals).forEach(a => {
+    if (a.tipo !== 'aumento' || !a.loanId || a.status === 'recusada') return;
+    const l = S.data.loans[a.loanId];
+    if (l && !l.cancelada && C.loanSummary(l, ref).quitado) return;
+    const c = S.data.clients[a.clientId];
+    if (a.status === 'aprovada' && c) {
+      const nc = clone(c); nc.historicoNivel = nc.historicoNivel || [];
+      if ((nc.nivel || 1) === a.para) nc.nivel = a.de;
+      const i = nc.historicoNivel.map(h => h.motivo).lastIndexOf('Aumento aprovado: ' + a.motivo);
+      if (i >= 0) nc.historicoNivel.splice(i, 1);
+      put('clients', nc.id, nc);
+    }
+    del('approvals', a.id);
+    log('Aumento de limite revertido', `${c ? c.nome : '?'}: nível ${a.para} → ${a.de} (contrato deixou de estar quitado)`);
+    out.push({ nome: c ? c.nome : '?', de: a.de, aprovada: a.status === 'aprovada' });
+  });
+  return out;
+}
 function runAutomations(silent) {
   if (!allReady()) return;
   const cfg = getCfg();
+  const rev = reverterAumentos();
+  if (rev.length) toast(rev.map(r => r.aprovada ? `Aumento de limite de ${r.nome} revertido (voltou ao nível ${r.de}).` : `Sugestão de aumento de ${r.nome} removida.`).join(' '));
   const sug = C.sugestoes(S.data, cfg, C.today());
   sug.forEach(a => { put('approvals', a.id, a); });
   if (cfg.aprovacaoAutomatica) sug.forEach(a => decide(a.id, true, 'auto'));
@@ -2708,7 +2731,7 @@ const ACT = {
   },
   estornar: async el => {
     if (!await confirmBox('Estornar este pagamento? A parcela volta a ficar em aberto.', { submitText: 'Estornar', danger: true })) return;
-    const n = clone(S.data.loans[el.dataset.loan]); if (C.estornar(n, Number(el.dataset.idx), el.dataset.pag)) { put('loans', n.id, n); log('Pagamento estornado', (S.data.clients[n.clientId] || {}).nome || ''); toast('Pagamento estornado.'); }
+    const n = clone(S.data.loans[el.dataset.loan]); if (C.estornar(n, Number(el.dataset.idx), el.dataset.pag)) { put('loans', n.id, n); log('Pagamento estornado', (S.data.clients[n.clientId] || {}).nome || ''); toast('Pagamento estornado.'); runAutomations(true); }
   },
   relPreset: el => {
     const hoje = C.today(), v = el.dataset.v, R = UI.rel;

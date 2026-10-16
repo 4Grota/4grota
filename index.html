@@ -676,6 +676,7 @@ C.DEFAULT_CONFIG = {
   aprovacaoAutomatica: false,
   msgCobranca: 'Olá, {nome}! Aqui é da {empresa}. Sua parcela {parcela} de {valor}, com vencimento em {vencimento}, está em aberto. Total hoje (com encargos): {total}. Pix: {pix}. Pode nos enviar o comprovante quando pagar?',
   msgCobrancaTotal: 'Olá, {nome}! Aqui é da {empresa}. \u{1F44B}\nPara deixar seu empréstimo em dia hoje, o valor é:\n\n\u{1F4CC} {titulo_atraso}: {valor_atraso}\n{lista_atraso}\n\u26A0\uFE0F Multa e encargos por atraso: {encargos}\n{linha_hoje}\n\u{1F4B3} Total para regularizar hoje: {total}\n\n\u{1F4B8} Pix (chave: {pix})\n\u{1F464} Beneficiário: {beneficiario}\n\nO encargo aumenta a cada dia de atraso. Pode nos enviar o comprovante quando pagar? Qualquer dúvida, é só falar.',
+  msgQuitacao: 'Olá, *{nome}*! \u{1F44B} Aqui é da {empresa}.\nPara quitar seu contrato hoje ({data}), o valor é:\n\n\u{1F4B0} Parcelas em aberto ({qtd}): {saldo}\n⚠️ Multa e encargos por atraso: {encargos}\n✅ *Total para quitar: {total}*\n\n\u{1F4B8} Pix (chave: {pix})\n\u{1F464} Beneficiário: {beneficiario}\n\nEsse valor vale para pagamento hoje. Se passar do dia, os encargos aumentam. Pode nos enviar o comprovante quando pagar? Qualquer dúvida, é só falar.',
   msgEncerramento: 'Olá, *{nome}*! \u{1F44B}\nAqui é da {empresa}. Seu contrato de {valor} foi quitado e está oficialmente encerrado. \u2705\n\nMuito obrigado pela confiança e por honrar seus pagamentos! \u{1F64F}\n{linha_limite}\nQuando precisar de um novo crédito, é só chamar a gente por aqui.',
   msgLimite: 'Olá, *{nome}*! \u{1F44B}\nAqui é da {empresa}. Boa notícia: o seu limite de crédito aumentou! \u{1F389}\n\n\u{1F4C8} Novo limite: até {limite_novo}\n{linha_antes}\nQuando quiser um novo empréstimo, é só chamar a gente por aqui.',
   msgLembrete: 'Olá, {nome}! Lembrete da {empresa}: sua parcela {parcela} de {valor} vence hoje. Pix: {pix}. Obrigado!'
@@ -696,7 +697,7 @@ C.mergeConfig = s0 => {
   }
   d.versao = C.DEFAULT_CONFIG.versao;
   // repara textos salvos com emojis perdidos (caractere \ufffd): recoloca o emoji certo pela palavra seguinte
-  ['msgCobrancaTotal', 'msgCobranca', 'msgLembrete', 'msgEncerramento', 'msgLimite'].forEach(k => {
+  ['msgCobrancaTotal', 'msgCobranca', 'msgLembrete', 'msgEncerramento', 'msgLimite', 'msgQuitacao'].forEach(k => {
     if (typeof d[k] !== 'string' || d[k].indexOf('\ufffd') < 0) return;
     const mapa = [[/\ufffd\ufe0f?(\s*(?:\{titulo_atraso\}|Parcelas? em atraso))/g, '\u{1F4CC}$1'], [/\ufffd\ufe0f?(\s*Multa)/g, '\u26A0\uFE0F$1'], [/\ufffd\ufe0f?(\s*Parcela de hoje)/g, '\u{1F4C6}$1'],
       [/\ufffd\ufe0f?(\s*Total para)/g, '\u{1F4B3}$1'], [/\ufffd\ufe0f?(\s*Pix)/g, '\u{1F4B8}$1'], [/\ufffd\ufe0f?(\s*Benefici)/g, '\u{1F464}$1'], [/(\.|!)\s*\ufffd\ufe0f?\s*(\n|$)/g, '$1 \u{1F44B}$2']];
@@ -1749,6 +1750,25 @@ function msgLimiteTxt(a, c) {
     limite_antes: ant > 0 ? brl(ant) : '', linha_antes: ant > 0 ? `Limite anterior: até ${brl(ant)}` : '', faixa_nova: limTxt(cfg, a.para)
   });
 }
+function msgQuitacaoTxt(l, c) {
+  const cfg = getCfg(), s = C.loanSummary(l, derived().ref);
+  const abertas = l.parcelas.filter((p, i) => !s.infos[i].quit && !s.infos[i].baixada).length;
+  return tplLinhas(cfg.msgQuitacao, {
+    nome: String(firstName(c.nome)).replace(/\*/g, ''), empresa: cfg.empresa || '4G Rota', data: C.fmtBR(derived().ref),
+    qtd: String(abertas), saldo: brl(s.saldo), encargos: s.enc > 0 ? brl(s.enc) : '', total: brl(s.totalDevido),
+    pix: cfg.chavePix || '[chave Pix]', beneficiario: cfg.beneficiario || ''
+  });
+}
+function quitacaoBlock(l, c, s) {
+  if (s.quitado || l.encerramento || l.cancelada) return '';
+  const txt = msgQuitacaoTxt(l, c);
+  return `<details style="margin:14px 0"><summary class="small" style="cursor:pointer"><b>Mensagem: valor para quitar hoje</b> (${brl(s.totalDevido)})</summary><div class="card" style="margin-top:8px">
+    <p class="muted small" style="margin:0 0 10px">Para quando o cliente perguntar quanto falta para quitar tudo.</p>
+    ${!getCfg().chavePix || !getCfg().beneficiario ? `<div class="alert warn">Informe a chave Pix e o nome do beneficiário em Configurações para entrarem na mensagem.</div>` : ''}
+    ${msgAviso(c)}${msgBubble(txt)}
+    <div class="row"><button class="btn pri" data-act="copyQuit" data-id="${l.id}">Copiar mensagem</button><a class="btn" target="_blank" rel="noopener noreferrer" href="${esc(waHref(c, txt))}">Abrir no WhatsApp</a></div>
+  </div></details>`;
+}
 function encerramentoBlock(l, c, s, nv) {
   const pago = l.encerramento ? l.encerramento.tipo === 'acordo' : s.quitado;
   if (!pago || l.cancelada) return '';
@@ -1804,6 +1824,7 @@ function loanBody(id) {
     ${!s.quitado ? `<button class="btn dng" data-act="encerrar" data-id="${id}">Encerrar contrato</button>` : ''}
     ${l.encerramento ? `<button class="btn" data-act="reabrir" data-id="${id}">Reabrir contrato</button>` : ''}</div>
   ${(() => { const enc = encerramentoBlock(l, c, s, nv), conf = confirmBlock(l, c, nv === 'novo'); return enc ? enc + (conf ? `<details style="margin:14px 0"><summary class="small" style="cursor:pointer">Ver a mensagem de confirmação do empréstimo</summary>${conf}</details>` : '') : conf; })()}
+  ${quitacaoBlock(l, c, s)}
   <div class="kv"><div><b>Valor emprestado</b>${brl(l.valor)}</div><div><b>Plano</b>${l.plano}x · juros ${C.fmtPct(l.taxa)} (${brl(l.jurosTotal)})</div><div><b>Total a pagar</b>${brl(l.total)}</div>
   <div><b>Liberado em</b>${C.fmtBR(l.liberadoEm)}</div><div><b>Saldo das parcelas</b>${brl(s.saldo)}</div><div><b>Encargos hoje</b>${brl(s.enc)}</div>
   <div><b>Total para quitar hoje</b>${brl(s.totalDevido)}</div><div><b>Regras</b><span class="small">multa ${C.fmtPct(l.regras.multa)} · ${C.fmtPct(l.regras.dia)}/dia · tolerância ${l.regras.tolerancia}d · ${l.regras.teto ? 'limite ' + l.regras.teto + 'd' : 'sem limite de dias'}</span></div></div>
@@ -2609,7 +2630,7 @@ function pConfig() {
   <div class="card"><h3>Escada de crédito</h3><div class="fgrid">${fld('Limite máximo de cada nível (R$)', inp('ladder', cfg.ladder.map(v => (v / 100).toFixed(2).replace('.', ',')).join('; ')), 'Separe por ponto e vírgula. O último é o teto.', 'full')}${fld('Valor mínimo do empréstimo (R$)', inp('valorMinimo', (cfg.valorMinimo / 100).toFixed(2).replace('.', ','), 'inputmode="decimal"'), '', 'full')}${fld('Faixa inicial de cada nível (R$)', inp('ladderMin', (cfg.ladderMin || []).map(x => (x / 100).toFixed(2).replace('.', ',')).join('; ')), 'Só para exibir (ex.: 300; 600; 800). O teto de cada nível é o limite máximo acima.', 'full')}<p class="muted small full" style="margin:0">Os planos 10x, 20x e 30x valem para qualquer valor. O juros depende só do plano escolhido.</p>${fld('Comprometimento máx. do ganho diário (%)', inp('comprometimentoMax', pc(cfg.comprometimentoMax), 'inputmode="decimal"'))}${fld('Exposição máx. por cliente (% do capital)', inp('exposicaoMax', pc(cfg.exposicaoMax), 'inputmode="decimal"'))}</div></div>
   <div class="card"><h3>Regras de subir e descer de nível</h3><div class="fgrid">${fld('Subir: máx. de parcelas atrasadas no contrato', inp('subirMaxParcelasAtrasadas', cfg.subirMaxParcelasAtrasadas, 'inputmode="numeric"'))}${fld('Subir: dias de relacionamento (a partir do nível 3)', inp('subirDiasRelacionamento', cfg.subirDiasRelacionamento, 'inputmode="numeric"'))}${fld('Subir para o último nível: atraso máx. (dias)', inp('subirMaxAtrasoUltimoNivel', cfg.subirMaxAtrasoUltimoNivel, 'inputmode="numeric"'))}${fld('Descer um nível se atraso passar de (dias)', inp('descerAtrasoDias', cfg.descerAtrasoDias, 'inputmode="numeric"'))}${fld('Sugerir bloqueio se atraso passar de (dias)', inp('bloquearAtrasoDias', cfg.bloquearAtrasoDias, 'inputmode="numeric"'))}
   <label class="chk full"><input type="checkbox" data-f="aprovacaoAutomatica" ${cfg.aprovacaoAutomatica ? 'checked' : ''}> Aprovar automaticamente as sugestões (não recomendado no início)</label></div></div>
-  <div class="card"><h3>Mensagens de cobrança (WhatsApp)</h3><div class="fgrid">${fld('Cliente em atraso', `<textarea data-f="msgCobranca" rows="4">${esc(cfg.msgCobranca)}</textarea>`, 'Campos: {nome} {empresa} {parcela} {valor} {vencimento} {total} {pix}', 'full')}${fld('Cobrança com o total (botão "Cobrar total")', `<textarea data-f="msgCobrancaTotal" rows="12">${esc(cfg.msgCobrancaTotal)}</textarea>`, 'Campos: {nome} {empresa} {titulo_atraso} {qtd_atraso} {valor_atraso} {lista_atraso} {encargos} {linha_hoje} {hoje} {total} {pix} {beneficiario}. Linha com campo vazio (ex.: sem parcela hoje) some sozinha.', 'full')}${fld('Agradecimento ao quitar o contrato', `<textarea data-f="msgEncerramento" rows="7">${esc(cfg.msgEncerramento)}</textarea>`, 'Campos: {nome} {empresa} {valor} {limite} {linha_limite}. Linha com campo vazio some sozinha.', 'full')}${fld('Aviso de aumento de limite', `<textarea data-f="msgLimite" rows="7">${esc(cfg.msgLimite)}</textarea>`, 'Campos: {nome} {empresa} {limite_novo} {limite_antes} {linha_antes} {faixa_nova}.', 'full')}${fld('Lembrete (vence hoje)', `<textarea data-f="msgLembrete" rows="3">${esc(cfg.msgLembrete)}</textarea>`, '', 'full')}</div></div>
+  <div class="card"><h3>Mensagens de cobrança (WhatsApp)</h3><div class="fgrid">${fld('Cliente em atraso', `<textarea data-f="msgCobranca" rows="4">${esc(cfg.msgCobranca)}</textarea>`, 'Campos: {nome} {empresa} {parcela} {valor} {vencimento} {total} {pix}', 'full')}${fld('Cobrança com o total (botão "Cobrar total")', `<textarea data-f="msgCobrancaTotal" rows="12">${esc(cfg.msgCobrancaTotal)}</textarea>`, 'Campos: {nome} {empresa} {titulo_atraso} {qtd_atraso} {valor_atraso} {lista_atraso} {encargos} {linha_hoje} {hoje} {total} {pix} {beneficiario}. Linha com campo vazio (ex.: sem parcela hoje) some sozinha.', 'full')}${fld('Valor para quitar (cliente perguntou)', `<textarea data-f="msgQuitacao" rows="9">${esc(cfg.msgQuitacao)}</textarea>`, 'Campos: {nome} {empresa} {data} {qtd} {saldo} {encargos} {total} {pix} {beneficiario}. Linha com campo vazio (ex.: sem encargos) some sozinha.', 'full')}${fld('Agradecimento ao quitar o contrato', `<textarea data-f="msgEncerramento" rows="7">${esc(cfg.msgEncerramento)}</textarea>`, 'Campos: {nome} {empresa} {valor} {limite} {linha_limite}. Linha com campo vazio some sozinha.', 'full')}${fld('Aviso de aumento de limite', `<textarea data-f="msgLimite" rows="7">${esc(cfg.msgLimite)}</textarea>`, 'Campos: {nome} {empresa} {limite_novo} {limite_antes} {linha_antes} {faixa_nova}.', 'full')}${fld('Lembrete (vence hoje)', `<textarea data-f="msgLembrete" rows="3">${esc(cfg.msgLembrete)}</textarea>`, '', 'full')}</div></div>
   ${usuariosCard()}
   <div class="card"><h3>Backup</h3><p class="muted small" style="margin-top:0">Baixe uma cópia de todos os dados de tempos em tempos. A restauração substitui registros com o mesmo código.</p><div class="row"><button class="btn" data-act="exportJson">Baixar backup (JSON)</button><button class="btn" data-act="importJson">Restaurar backup</button></div></div>
   <div class="card"><h3>Privacidade (LGPD)</h3><p class="muted small" style="margin-top:0">O sistema guarda só dados cadastrais e a conferência dos documentos. Não anexe fotos de documentos, selfies ou senhas aqui. Compartilhe o acesso apenas com os sócios e mantenha os arquivos dos clientes em local protegido.</p></div>
@@ -2640,7 +2661,7 @@ function saveCfg() {
   const lm = f.ladderMin ? f.ladderMin.split(/[;]/).map(x => C.parseMoney(x)).filter(x => x > 0) : []; n.ladderMin = lm;
   delete n.faixas; delete n.nivel1Planos; n.versao = C.DEFAULT_CONFIG.versao;
   n.aprovacaoAutomatica = !!f.aprovacaoAutomatica; n.msgCobranca = f.msgCobranca; n.msgLembrete = f.msgLembrete; n.msgCobrancaTotal = (f.msgCobrancaTotal || '').trim() || C.DEFAULT_CONFIG.msgCobrancaTotal;
-  n.msgEncerramento = (f.msgEncerramento || '').trim() || C.DEFAULT_CONFIG.msgEncerramento; n.msgLimite = (f.msgLimite || '').trim() || C.DEFAULT_CONFIG.msgLimite;
+  n.msgQuitacao = (f.msgQuitacao || '').trim() || C.DEFAULT_CONFIG.msgQuitacao; n.msgEncerramento = (f.msgEncerramento || '').trim() || C.DEFAULT_CONFIG.msgEncerramento; n.msgLimite = (f.msgLimite || '').trim() || C.DEFAULT_CONFIG.msgLimite;
   if (erros.length) return toast(erros[0], 'bad');
   put('config', 'main', n); log('Configurações alteradas', 'Parâmetros do sistema atualizados'); toast('Configurações salvas.'); runAutomations();
 }
@@ -2692,6 +2713,7 @@ const ACT = {
   newLoan: () => loanForm(),
   newLoanFor: el => { closeModal(); loanForm(el.dataset.id); },
   payAll: el => payForm(el.dataset.loan, null, true),
+  copyQuit: async el => { const l = S.data.loans[el.dataset.id]; if (!l) return; const ok = await copyTxt(msgQuitacaoTxt(l, S.data.clients[l.clientId] || { nome: '' })); toast(ok ? 'Mensagem copiada. É só colar no WhatsApp.' : 'Não consegui copiar. Selecione o texto do balão e copie.', ok ? undefined : 'bad'); },
   copyEnc: async el => { const l = S.data.loans[el.dataset.id]; if (!l) return; const ok = await copyTxt(msgEncerramentoTxt(l, S.data.clients[l.clientId] || { nome: '' })); toast(ok ? 'Mensagem copiada. É só colar no WhatsApp.' : 'Não consegui copiar. Selecione o texto do balão e copie.', ok ? undefined : 'bad'); },
   copyModalMsg: async () => { const ok = await copyTxt(UI.msgModalTxt || ''); toast(ok ? 'Mensagem copiada. É só colar no WhatsApp.' : 'Não consegui copiar. Selecione o texto do balão e copie.', ok ? undefined : 'bad'); },
   msgLimite: el => msgLimiteForm(el.dataset.id),

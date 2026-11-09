@@ -1630,7 +1630,7 @@ function clientBody(id) {
   <div>${C.DOCS.map(([k, l]) => `<label class="chk"><input type="checkbox" data-act="docToggle" data-id="${id}" data-k="${k}" ${c.docs && c.docs[k] ? 'checked' : ''}> ${esc(l)}</label>`).join('')}</div>
   <div class="sec-h">Contratos</div>
   ${loans.length ? tbl([['Liberado em'], ['Valor', 'num'], ['Plano'], ['Saldo', 'num'], ['Situação']], loans.map(l => { const s = C.loanSummary(l, D.ref); return `<tr class="click" data-act="openLoan" data-id="${l.id}"><td>${C.fmtBR(l.liberadoEm)}</td><td class="num">${brl(l.valor)}</td><td>${l.plano}x</td><td class="num">${brl(s.saldo)}</td><td>${loanChip(s.status)}</td></tr>`; })) : '<div class="muted">Nenhum contrato ainda.</div>'}
-  ${(c.historicoNivel || []).length ? `<div class="sec-h">Histórico de limite</div>${(c.historicoNivel || []).slice().reverse().map(h => `<div class="small" style="padding:3px 0"><b>${C.fmtBR(h.data)}</b> · nível ${h.de} → ${h.para} · ${esc(h.motivo)} <span class="muted">(${esc(h.por === 'auto' ? 'automático' : nameOf(h.por))})</span></div>`).join('')}` : ''}
+  ${(c.historicoNivel || []).length ? `<div class="sec-h">Histórico de limite</div>${(c.historicoNivel || []).map((h, i) => ({ h, i })).reverse().map(({ h, i }) => `<div class="small" style="padding:3px 0"><b>${C.fmtBR(h.data)}</b> · nível ${h.de} → ${h.para} · ${esc(h.motivo)} <span class="muted">(${esc(h.por === 'auto' ? 'automático' : nameOf(h.por))})</span>${(h.limDepois != null ? h.limDepois > h.limAntes : h.para > h.de) ? ` <button class="btn sm" data-act="msgLimiteHist" data-id="${c.id}" data-idx="${i}">Mensagem ao cliente</button>` : ''}</div>`).join('')}` : ''}
   ${(c.contatos || []).length ? `<div class="sec-h">Contatos de cobrança</div>${(c.contatos || []).slice().reverse().slice(0, 8).map(k => `<div class="small" style="padding:3px 0"><b>${C.fmtBR(k.data)}</b> · ${esc(k.canal)} · ${esc(k.resultado || '')}${k.promessa ? ` · promessa para ${C.fmtBR(k.promessa)}` : ''}</div>`).join('')}` : ''}
   <div class="sec-h">Zona de risco</div>
   <div><button class="btn sm dng" data-act="delClient" data-id="${id}">Excluir cliente</button></div>`;
@@ -1660,14 +1660,16 @@ function ajusteForm(id) {
     submitText: 'Aplicar',
     onSubmit: el => {
       const f = form(el); if (!f.motivo) return setErr(el, 'Informe o motivo do ajuste.');
-      const n = clone(c); const de = n.nivel || 1; const para = Number(f.nivel);
+      const n = clone(c); const de = n.nivel || 1; const para = Number(f.nivel); const limAntes = C.limite(c, cfg);
       let custom = null;
       if (f.custom) { custom = C.parseMoney(f.custom); if (isNaN(custom) || custom <= 0) return setErr(el, 'Limite personalizado inválido.'); if (custom > Math.max(...cfg.ladder)) return setErr(el, 'Acima do teto da escada (' + brl(Math.max(...cfg.ladder)) + ').'); }
       n.nivel = para; n.limiteCustom = custom;
       n.historicoNivel = n.historicoNivel || [];
-      n.historicoNivel.push({ data: C.today(), de, para, motivo: 'Ajuste manual: ' + f.motivo + (custom != null ? ` (limite personalizado ${brl(custom)})` : ''), por: ME.id });
+      const limDepois = C.limite(n, cfg);
+      n.historicoNivel.push({ data: C.today(), de, para, motivo: 'Ajuste manual: ' + f.motivo + (custom != null ? ` (limite personalizado ${brl(custom)})` : ''), por: ME.id, limAntes, limDepois });
       put('clients', id, n); log('Ajuste manual de limite', `${c.nome}: nível ${de} → ${para}${custom != null ? ', limite ' + brl(custom) : ''}. ${f.motivo}`);
       closeModal(); toast('Limite atualizado.');
+      if (limDepois > limAntes) msgLimiteManual(n, de, para, limAntes, limDepois);
     }
   });
 }
@@ -1748,8 +1750,8 @@ function msgEncerramentoTxt(l, c) {
     limite: lim > 0 ? brl(lim) : '', linha_limite: lim > 0 ? `Seu limite para um novo empréstimo é de até ${brl(lim)}.` : ''
   });
 }
-function msgLimiteTxt(a, c) {
-  const cfg = getCfg(), lim = C.limite(c, cfg), ant = cfg.ladder[Math.min(a.de, cfg.ladder.length) - 1];
+function msgLimiteTxt(a, c, ov) {
+  const cfg = getCfg(), lim = ov && ov.novo != null ? ov.novo : C.limite(c, cfg), ant = ov && ov.antes != null ? ov.antes : cfg.ladder[Math.min(a.de, cfg.ladder.length) - 1];
   return tplLinhas(cfg.msgLimite, {
     nome: String(firstName(c.nome)).replace(/\*/g, ''), empresa: cfg.empresa || '4G Rota', limite_novo: brl(lim),
     limite_antes: ant > 0 ? brl(ant) : '', linha_antes: ant > 0 ? `Limite anterior: até ${brl(ant)}` : '', faixa_nova: limTxt(cfg, a.para)
@@ -1790,6 +1792,11 @@ function cobTotalForm(loanId) {
   const l = S.data.loans[loanId], c = l && S.data.clients[l.clientId]; if (!c) return;
   const D = derived(), txt = waTotal(D.cfg, c, l, C.loanSummary(l, D.ref)); UI.msgModalTxt = txt;
   openModal('Cobrança com total · ' + c.nome, `<p class="muted small" style="margin:0 0 10px">Copie e cole no WhatsApp, ou abra a conversa já com a mensagem.</p>${msgAviso(c)}${msgBubble(txt)}
+    <div class="row"><button class="btn pri" data-act="copyModalMsg">Copiar mensagem</button><a class="btn" target="_blank" rel="noopener noreferrer" href="${esc(waHref(c, txt))}">Abrir no WhatsApp</a></div>`, { footer: false });
+}
+function msgLimiteManual(c, de, para, antes, novo) {
+  const txt = msgLimiteTxt({ de, para }, c, { antes, novo }); UI.msgModalTxt = txt;
+  openModal('Aviso de aumento de limite · ' + c.nome, `<p class="muted small" style="margin:0 0 10px">Envie ao cliente para avisar que o limite aumentou.</p>${msgAviso(c)}${msgBubble(txt)}
     <div class="row"><button class="btn pri" data-act="copyModalMsg">Copiar mensagem</button><a class="btn" target="_blank" rel="noopener noreferrer" href="${esc(waHref(c, txt))}">Abrir no WhatsApp</a></div>`, { footer: false });
 }
 function msgLimiteForm(id) {
@@ -2728,6 +2735,7 @@ const ACT = {
   copyEnc: async el => { const l = S.data.loans[el.dataset.id]; if (!l) return; const ok = await copyTxt(msgEncerramentoTxt(l, S.data.clients[l.clientId] || { nome: '' })); toast(ok ? 'Mensagem copiada. É só colar no WhatsApp.' : 'Não consegui copiar. Selecione o texto do balão e copie.', ok ? undefined : 'bad'); },
   copyModalMsg: async () => { const ok = await copyTxt(UI.msgModalTxt || ''); toast(ok ? 'Mensagem copiada. É só colar no WhatsApp.' : 'Não consegui copiar. Selecione o texto do balão e copie.', ok ? undefined : 'bad'); },
   msgLimite: el => msgLimiteForm(el.dataset.id),
+  msgLimiteHist: el => { const c = S.data.clients[el.dataset.id], h = c && (c.historicoNivel || [])[Number(el.dataset.idx)]; if (h) msgLimiteManual(c, h.de, h.para, h.limAntes, h.limDepois); },
   cobTotal: el => cobTotalForm(el.dataset.loan),
   openLoan: el => openLoan(el.dataset.id),
   copyConfirm: async el => { const l = S.data.loans[el.dataset.id]; if (!l) return; const ok = await copyTxt(C.msgConfirmacao(l, S.data.clients[l.clientId] || { nome: '' }, getCfg())); toast(ok ? 'Mensagem copiada. É só colar no WhatsApp.' : 'Não consegui copiar. Selecione o texto do balão e copie.', ok ? undefined : 'bad'); },
